@@ -3,7 +3,7 @@
 """
 科技新闻日报聚合系统 - 使用多个免费信息源
 收集全球科技新闻，按重要度排序，生成日报
-支持中英文混合新闻源
+支持中英文混合新闻源 + 自动翻译
 """
 
 import os
@@ -11,12 +11,91 @@ import json
 import requests
 import feedparser
 from datetime import datetime, timedelta
-from typing import List, Dict, Set
+from typing import List, Dict, Set, Tuple
 from collections import defaultdict
 import time
 from dotenv import load_dotenv
 
 load_dotenv()
+
+class TranslationHelper:
+    """翻译辅助类 - 使用 Google Translate API"""
+    
+    def __init__(self):
+        self.cache = {}
+        self.translator_available = False
+        try:
+            from google.cloud import translate_v2
+            self.translator = translate_v2.Client()
+            self.translator_available = True
+            print("✅ Google Translate API 已就绪")
+        except:
+            try:
+                import translators
+                self.trans = translators
+                self.translator_available = True
+                print("✅ 在线翻译服务已就绪")
+            except:
+                print("⚠️ 翻译服务不可用，将使用简单翻译")
+                self.translator_available = False
+    
+    def detect_language(self, text: str) -> str:
+        """检测文本语言"""
+        if not text:
+            return 'unknown'
+        
+        # 简单的中文检测
+        chinese_count = sum(1 for c in text if '\u4e00' <= c <= '\u9fff')
+        
+        if chinese_count / len(text) > 0.3:  # 超过30%是中文字符
+            return 'zh'
+        else:
+            return 'en'
+    
+    def translate(self, text: str, target_lang: str = 'zh') -> str:
+        """翻译文本"""
+        if not text:
+            return text
+        
+        # 检查缓存
+        cache_key = f"{text[:50]}_{target_lang}"
+        if cache_key in self.cache:
+            return self.cache[cache_key]
+        
+        try:
+            # 尝试使用在线翻译服务
+            translated = self._translate_online(text, target_lang)
+            self.cache[cache_key] = translated
+            return translated
+        except:
+            # 降级方案：返回原文
+            return text
+    
+    def _translate_online(self, text: str, target_lang: str) -> str:
+        """使用在线翻译服务"""
+        try:
+            # 使用免费的翻译API
+            from translators import google
+            result = google(text, from_language='en', to_language='zh')
+            return result if result else text
+        except:
+            try:
+                # 备用方案：使用更简单的 API
+                url = "https://api.mymemory.translated.net/get"
+                params = {
+                    'q': text[:500],  # API 限制
+                    'langpair': f'en|{target_lang}'
+                }
+                response = requests.get(url, params=params, timeout=5)
+                if response.status_code == 200:
+                    result = response.json()
+                    if result['responseStatus'] == 200:
+                        return result['responseData']['translatedText']
+            except:
+                pass
+            
+            return text
+
 
 class NewsAggregator:
     """新闻聚合器 - 支持多个信息源"""
@@ -60,6 +139,7 @@ class NewsAggregator:
     def __init__(self):
         self.articles = []
         self.seen_titles: Set[str] = set()
+        self.translator = TranslationHelper()
         
         # 新闻分类映射（支持中英文）
         self.categories = {
@@ -70,7 +150,7 @@ class NewsAggregator:
             '基础科学': ['physics', 'chemistry', 'biology', 'quantum', '量子', '科学', 'science',
                        'breakthrough', 'discovery', '突破', '发现', '科研'],
             '物理': ['particle', 'relativity', 'cosmology', 'astrophysics', 'dark matter', 'quantum',
-                    'photon', 'electron', 'physics', '物理', '粒子', '宇宙', '黑洞'],
+                    'photon', 'electron', 'physics', '���理', '粒子', '宇宙', '黑洞'],
             '生物': ['biology', 'genetics', 'protein', 'cell', 'DNA', 'RNA', 'gene', 'biological',
                     '生物', '遗传', '基因', '蛋白质', '细胞'],
             '化学': ['chemistry', 'chemical', 'molecule', 'compound', 'material', '化学', '分子', '材料'],
@@ -123,7 +203,6 @@ class NewsAggregator:
                             
                             # 清理 HTML 标签
                             if '<' in summary:
-                                # 简单的 HTML 标签移除
                                 import re
                                 summary = re.sub('<[^<]+?>', '', summary)
                             
@@ -131,6 +210,9 @@ class NewsAggregator:
                             
                             # 获取发布时间
                             pub_date = entry.get('published', '')
+                            
+                            # 检测原始语言
+                            original_lang = self.translator.detect_language(title)
                             
                             article = {
                                 'title': title,
@@ -140,6 +222,9 @@ class NewsAggregator:
                                 'published_at': pub_date,
                                 'category': '',
                                 'importance': 0,
+                                'original_lang': original_lang,
+                                'translated_title': title,
+                                'translated_description': summary,
                             }
                             
                             articles.append(article)
@@ -191,6 +276,8 @@ class NewsAggregator:
                         
                         self.seen_titles.add(title)
                         
+                        original_lang = self.translator.detect_language(title)
+                        
                         article = {
                             'title': title,
                             'url': f"https://reddit.com{post_data.get('permalink', '')}",
@@ -199,6 +286,9 @@ class NewsAggregator:
                             'published_at': '',
                             'category': '',
                             'importance': 0,
+                            'original_lang': original_lang,
+                            'translated_title': title,
+                            'translated_description': post_data.get('selftext', '')[:300],
                         }
                         
                         articles.append(article)
@@ -213,6 +303,31 @@ class NewsAggregator:
         except Exception as e:
             print(f"✗ 错误: {str(e)[:50]}")
         
+        return articles
+    
+    def translate_articles(self, articles: List[Dict]) -> List[Dict]:
+        """翻译英文文章"""
+        print("\n🌐 翻译英文新闻中...")
+        translated_count = 0
+        
+        for article in articles:
+            if article.get('original_lang') == 'en':
+                try:
+                    # 翻译标题
+                    translated_title = self.translator.translate(article['title'], 'zh-CN')
+                    if translated_title and translated_title != article['title']:
+                        article['translated_title'] = translated_title
+                        translated_count += 1
+                    
+                    # 翻译描述
+                    if article.get('description'):
+                        translated_desc = self.translator.translate(article['description'][:200], 'zh-CN')
+                        if translated_desc:
+                            article['translated_description'] = translated_desc
+                except:
+                    pass
+        
+        print(f"  ✓ 完成翻译 ({translated_count} 篇)")
         return articles
     
     def categorize_article(self, title: str, description: str = '') -> str:
@@ -233,7 +348,7 @@ class NewsAggregator:
         return '信息工程'  # 默认分类
     
     def calculate_importance(self, article: Dict) -> int:
-        """计算新闻重要性评分 (1-100)"""
+        """计算新闻重要���评分 (1-100)"""
         score = 50  # 基础分
         
         title = article.get('title', '').lower()
@@ -305,7 +420,10 @@ class NewsAggregator:
         reddit_articles = self.fetch_reddit_science()
         all_articles.extend(reddit_articles)
         
-        print(f"\n📊 ���共获取: {len(all_articles)} 条新闻")
+        print(f"\n📊 总共获取: {len(all_articles)} 条新闻")
+        
+        # 翻译英文新闻
+        all_articles = self.translate_articles(all_articles)
         
         # 为每条新闻计算分类和重要性
         for article in all_articles:
@@ -390,6 +508,14 @@ class NewsAggregator:
                     word-break: break-word;
                 }}
                 .title a:hover {{ text-decoration: underline; }}
+                .original-title {{
+                    font-size: 13px;
+                    color: #999;
+                    margin-top: 6px;
+                    padding-top: 6px;
+                    border-top: 1px solid #eee;
+                    font-style: italic;
+                }}
                 .summary {{ 
                     color: #555;
                     margin: 12px 0;
@@ -442,23 +568,30 @@ class NewsAggregator:
             <div class="container">
                 <div class="header">
                     <h1>🌍 科技新闻日报</h1>
-                    <p>{today} | 精选全球中英文科技资讯</p>
+                    <p>{today} | 精选全球中英文科技资讯（自动翻译）</p>
                 </div>
         """
         
         for idx, article in enumerate(self.articles, 1):
             category = article.get('category', '未分类')
-            title = article.get('title', 'No Title')
+            translated_title = article.get('translated_title', 'No Title')
+            original_title = article.get('title', '')
             url = article.get('url', '#')
             source_name = article.get('source', {}).get('name', 'Unknown Source')
-            description = article.get('description', '')
+            translated_desc = article.get('translated_description', '')
             importance = article.get('importance', 50)
+            original_lang = article.get('original_lang', 'unknown')
             
             # 清理描述
-            if not description:
-                description = '暂无摘要'
-            elif len(description) > 250:
-                description = description[:250] + '...'
+            if not translated_desc:
+                translated_desc = '暂无摘要'
+            elif len(translated_desc) > 250:
+                translated_desc = translated_desc[:250] + '...'
+            
+            # 如果是英文翻译的，显示原标题
+            original_title_html = ''
+            if original_lang == 'en' and original_title != translated_title:
+                original_title_html = f'<div class="original-title">📌 原文标题: {original_title}</div>'
             
             html += f"""
                 <div class="news-item">
@@ -470,9 +603,10 @@ class NewsAggregator:
                         <div class="importance">重要度: {importance}/100</div>
                     </div>
                     <div class="title">
-                        <a href="{url}" target="_blank" style="word-break: break-word;">{title}</a>
+                        <a href="{url}" target="_blank" style="word-break: break-word;">{translated_title}</a>
                     </div>
-                    <div class="summary">{description}</div>
+                    {original_title_html}
+                    <div class="summary">{translated_desc}</div>
                     <div class="meta">
                         <div>来源: <span class="source-name">{source_name}</span></div>
                         <a href="{url}" target="_blank" class="read-more">查看原文 →</a>
@@ -483,7 +617,7 @@ class NewsAggregator:
         html += """
                 <div class="footer">
                     <p>✨ 此日报由 kjrb 科技新闻聚合系统自动生成</p>
-                    <p style="margin-top: 8px; opacity: 0.7;">每日 9:00 自动发送 | ��合全球权威媒体、学术机构及中文科技媒体新闻</p>
+                    <p style="margin-top: 8px; opacity: 0.7;">每日 9:00 自动发送 | 聚合全球权威媒体、学术机构及中文科技媒体新闻 | 英文新闻自动翻译成中文</p>
                 </div>
             </div>
         </body>
