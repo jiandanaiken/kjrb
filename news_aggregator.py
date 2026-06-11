@@ -3,6 +3,7 @@
 """
 科技新闻日报聚合系统 - 使用多个免费信息源
 收集全球科技新闻，按重要度排序，生成日报
+支持中英文混合新闻源
 """
 
 import os
@@ -22,7 +23,7 @@ class NewsAggregator:
     
     # RSS 源配置（最稳定的科技新闻源）
     RSS_FEEDS = {
-        '学术/科学': [
+        '国际学术/科学': [
             ('Nature', 'https://www.nature.com/nature.rss'),
             ('Science Magazine', 'https://www.science.org/action/showFeed?type=etoc&feed=rss'),
             ('ArXiv - AI/ML', 'https://arxiv.org/list/cs.AI/rss'),
@@ -30,19 +31,29 @@ class NewsAggregator:
             ('Phys.org', 'https://phys.org/rss-feed/'),
             ('ScienceDaily', 'https://www.sciencedaily.com/rss/all.xml'),
         ],
-        '工程/技术': [
+        '国际工程/技术': [
             ('IEEE Spectrum', 'https://spectrum.ieee.org/feed/rss'),
             ('MIT News', 'https://news.mit.edu/rss/feed.xml'),
             ('Stanford News', 'https://news.stanford.edu/news_type/research/feed/'),
         ],
-        '科技媒体': [
+        '国际科技媒体': [
             ('TechCrunch', 'https://techcrunch.com/feed/'),
             ('The Verge', 'https://www.theverge.com/rss/index.xml'),
             ('Hacker News', 'https://news.ycombinator.com/rss'),
         ],
-        '综合新闻': [
+        '国际综合新闻': [
             ('BBC Science', 'http://feeds.bbc.co.uk/news/science_and_environment/rss.xml'),
             ('Reuters Technology', 'https://www.reutersagency.com/feed/?taxonomy=best-topics&clientId=51&redirectTo=https%3A%2F%2Fwww.reuters.com'),
+        ],
+        '中文科技媒体': [
+            ('36氪', 'https://www.36kr.com/feed'),
+            ('机器之心', 'https://www.jiqizhixin.com/rss'),
+            ('InfoQ', 'https://www.infoq.cn/feed'),
+        ],
+        '中文科学资讯': [
+            ('科学网新闻', 'http://news.sciencenet.cn/rss.xml'),
+            ('果壳网', 'https://www.guokr.com/rss/'),
+            ('新浪科技', 'https://feed.sina.com.cn/tech/rss/techweb_pure.xml'),
         ]
     }
     
@@ -50,28 +61,28 @@ class NewsAggregator:
         self.articles = []
         self.seen_titles: Set[str] = set()
         
-        # 新闻分类映射
+        # 新闻分类映射（支持中英文）
         self.categories = {
             'AI': ['artificial intelligence', 'machine learning', 'deep learning', 'neural network', 
                    'GPT', 'ChatGPT', 'LLM', 'transformer', 'neural', 'algorithm', 'ai', '人工智能', 
-                   '机器学习', '深度学习'],
-            '机器人': ['robot', 'robotics', 'autonomous', 'drone', 'automation', '机器人'],
+                   '机器学习', '深度学习', '神经网络', 'ChatGPT', 'GPT'],
+            '机器人': ['robot', 'robotics', 'autonomous', 'drone', 'automation', '机器人', '自动化', '无人机'],
             '基础科学': ['physics', 'chemistry', 'biology', 'quantum', '量子', '科学', 'science',
-                       'breakthrough', 'discovery', '突破', '发现'],
+                       'breakthrough', 'discovery', '突破', '发现', '科研'],
             '物理': ['particle', 'relativity', 'cosmology', 'astrophysics', 'dark matter', 'quantum',
-                    'photon', 'electron', 'physics', '物理', '粒子'],
+                    'photon', 'electron', 'physics', '物理', '粒子', '宇宙', '黑洞'],
             '生物': ['biology', 'genetics', 'protein', 'cell', 'DNA', 'RNA', 'gene', 'biological',
-                    '生物', '遗传', '基因', '蛋白质'],
-            '化学': ['chemistry', 'chemical', 'molecule', 'compound', 'material', '化学', '分子'],
+                    '生物', '遗传', '基因', '蛋白质', '细胞'],
+            '化学': ['chemistry', 'chemical', 'molecule', 'compound', 'material', '化学', '分子', '材料'],
             '医疗': ['medical', 'healthcare', 'drug', 'vaccine', 'disease', 'cancer', 'health',
-                    'therapy', 'treatment', 'medicine', '医学', '医疗', '疫苗', '癌症'],
+                    'therapy', 'treatment', 'medicine', '医学', '医疗', '疫苗', '癌症', '药物'],
             '航空航天': ['space', 'aerospace', 'satellite', 'NASA', 'SpaceX', 'astronaut', '火箭',
-                       'spacecraft', 'orbit', 'mission', '航天', '航空', '卫星'],
+                       'spacecraft', 'orbit', 'mission', '航天', '航空', '卫星', '太空'],
             '心理学': ['psychology', 'mental health', 'neuroscience', 'brain', 'cognitive',
-                     '心理', '神经', '大脑'],
-            '社会学': ['social', 'sociology', 'human behavior', 'society', '社会'],
+                     '心理', '神经', '大脑', '认知'],
+            '社会学': ['social', 'sociology', 'human behavior', 'society', '社会', '人文'],
             '信息工程': ['computer', 'software', 'technology', 'cybersecurity', 'data', 
-                       'internet', 'cloud', 'network', '计算机', '软件', '安全'],
+                       'internet', 'cloud', 'network', '计算机', '软件', '安全', '互联网', '云计算'],
         }
     
     def fetch_rss_feeds(self) -> List[Dict]:
@@ -239,6 +250,11 @@ class NewsAggregator:
             'stanford': 10,
             'nasa': 12,
             'spacex': 10,
+            '36氪': 10,
+            '机器之心': 12,
+            'infoq': 10,
+            '科学网': 12,
+            '果壳': 8,
         }
         
         for source, boost in authority_boost.items():
@@ -250,11 +266,11 @@ class NewsAggregator:
         important_keywords = {
             'breakthrough': 15, '突破': 15,
             'discover': 12, '发现': 12,
-            'first': 10, '首次': 10,
-            'new': 5, '新': 5,
+            'first': 10, '首次': 10, '首个': 10,
+            'new': 5, '新': 5, '最新': 8,
             'record': 8, '记录': 8,
             'revolutionary': 12, '革命': 12,
-            'award': 10, '获奖': 10,
+            'award': 10, '获奖': 10, '获得': 5,
             'nobel': 20, '诺贝尔': 20,
         }
         
@@ -266,7 +282,6 @@ class NewsAggregator:
         # 时间权重（最近的新闻加分）
         try:
             if article.get('published_at'):
-                # 简单的时间处理
                 score += 5
         except:
             pass
@@ -290,7 +305,7 @@ class NewsAggregator:
         reddit_articles = self.fetch_reddit_science()
         all_articles.extend(reddit_articles)
         
-        print(f"\n📊 总共获取: {len(all_articles)} 条新闻")
+        print(f"\n📊 ���共获取: {len(all_articles)} 条新闻")
         
         # 为每条新闻计算分类和重要性
         for article in all_articles:
@@ -321,7 +336,7 @@ class NewsAggregator:
             <style>
                 * {{ margin: 0; padding: 0; box-sizing: border-box; }}
                 body {{ 
-                    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+                    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Microsoft YaHei', 'PingFang SC', sans-serif;
                     line-height: 1.6; 
                     color: #333;
                     background: #f5f5f5;
@@ -427,7 +442,7 @@ class NewsAggregator:
             <div class="container">
                 <div class="header">
                     <h1>🌍 科技新闻日报</h1>
-                    <p>{today} | 精选全球科技资讯</p>
+                    <p>{today} | 精选全球中英文科技资讯</p>
                 </div>
         """
         
@@ -468,7 +483,7 @@ class NewsAggregator:
         html += """
                 <div class="footer">
                     <p>✨ 此日报由 kjrb 科技新闻聚合系统自动生成</p>
-                    <p style="margin-top: 8px; opacity: 0.7;">每日 9:00 自动发送 | 聚合全球权威媒体和学术机构新闻</p>
+                    <p style="margin-top: 8px; opacity: 0.7;">每日 9:00 自动发送 | ��合全球权威媒体、学术机构及中文科技媒体新闻</p>
                 </div>
             </div>
         </body>
@@ -551,10 +566,10 @@ class NewsAggregator:
         
         # 保存报告
         report_path = self.save_report(html_report)
-        print(f"\n✅ ��告已保存: {report_path}")
+        print(f"\n✅ 报告已保存: {report_path}")
         
         # 发送邮件
-        target_email = os.getenv('TARGET_EMAIL', '539988@gmail.com')
+        target_email = os.getenv('TARGET_EMAIL', '70110@163.com')
         self.send_email(html_report, target_email)
         
         print("\n" + "="*60)
